@@ -21,6 +21,15 @@
  *
  * @version 1.0.0
  * @license MIT
+ *
+ * Exported functions
+ * ------------------
+ *   generateSalt()              → Uint8Array (16 bytes)
+ *   deriveKey(passphrase, salt) → Promise<CryptoKey>
+ *   encrypt(plaintext, key)     → Promise<string>    base64 [IV || ct]
+ *   decrypt(blob, key)          → Promise<string>    UTF-8 plaintext
+ *   encryptBuffer(buffer, key)  → Promise<ArrayBuffer>  [IV || ct]  (binary blobs)
+ *   decryptBuffer(buffer, key)  → Promise<ArrayBuffer>  plaintext   (binary blobs)
  */
 
 if (typeof crypto === 'undefined' || !crypto.subtle) {
@@ -161,4 +170,51 @@ export async function decrypt(blob, key) {
   const ct = combined.slice(12);
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
   return new TextDecoder().decode(pt);
+}
+
+/**
+ * Encrypt a binary buffer (ArrayBuffer) with AES-256-GCM.
+ * Used for video messages and file attachments — binary data that is not
+ * UTF-8 text. Generates a fresh 12-byte IV per call.
+ *
+ * Wire format: ArrayBuffer( IV[12 bytes] || AES-256-GCM-ciphertext+tag )
+ *
+ * @param {ArrayBuffer} buffer - Raw binary data to encrypt
+ * @param {CryptoKey}   key    - AES-256-GCM key from {@link deriveKey}
+ * @returns {Promise<ArrayBuffer>} [IV || ciphertext+tag] as ArrayBuffer
+ *
+ * @example
+ * const encrypted = await encryptBuffer(videoBlob.arrayBuffer(), key);
+ */
+export async function encryptBuffer(buffer, key) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, buffer);
+  const combined = new Uint8Array(12 + ct.byteLength);
+  combined.set(iv, 0);
+  combined.set(new Uint8Array(ct), 12);
+  return combined.buffer;
+}
+
+/**
+ * Decrypt a binary [IV || ciphertext+tag] ArrayBuffer produced by
+ * {@link encryptBuffer}.
+ *
+ * Throws a {@link DOMException} (`OperationError`) on tag verification
+ * failure or wrong key — same guarantees as {@link decrypt}.
+ *
+ * @param {ArrayBuffer} buffer - [IV || ciphertext+tag] from {@link encryptBuffer}
+ * @param {CryptoKey}   key    - AES-256-GCM key from {@link deriveKey}
+ * @returns {Promise<ArrayBuffer>} Decrypted binary data
+ *
+ * @throws {DOMException} On tag verification failure or wrong key
+ *
+ * @example
+ * const decrypted = await decryptBuffer(encryptedBuffer, key);
+ * const blob = new Blob([decrypted], { type: 'video/webm' });
+ */
+export async function decryptBuffer(buffer, key) {
+  const combined = new Uint8Array(buffer);
+  const iv = combined.slice(0, 12);
+  const ct = combined.slice(12);
+  return crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
 }
